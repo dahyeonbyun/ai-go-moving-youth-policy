@@ -132,70 +132,9 @@ function parseJsonObject(text) {
   return null;
 }
 
-// ---------- 스키마 검증 ----------
-const STATUS = ['student', 'employed', 'jobseeker', 'other'];
-const HOUSING = ['monthly_rent', 'jeonse', 'with_parents'];
-const SCOPES = ['before', 'after', 'national'];
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+// ---------- 스키마 검증 (js/schema.js — 화면과 같은 검사) ----------
+const { validatePolicy, SCOPES } = require('./js/schema.js');
 const isStr = (v) => typeof v === 'string' && v.trim() !== '';
-const strOrNull = (v) => v === null || typeof v === 'string';
-const dateOrNull = (v) => v === null || (typeof v === 'string' && DATE.test(v));
-
-function validatePolicy(p) {
-  const errors = [];
-  const err = (m) => errors.push(m);
-  if (!p || typeof p !== 'object' || Array.isArray(p)) return ['JSON 객체가 아닙니다.'];
-
-  for (const k of ['id', 'name', 'org']) if (!isStr(p[k])) err(`${k}가 비어 있습니다.`);
-  if (!SCOPES.includes(p.scope)) err('scope는 before / after / national 중 하나여야 합니다.');
-
-  const c = p.conditions;
-  if (!c || typeof c !== 'object' || Array.isArray(c)) {
-    err('conditions가 객체가 아닙니다.');
-  } else {
-    const q = (name, o) => { if (!isStr(o.quote)) err(`${name}.quote가 비어 있습니다.`); };
-    const check = {
-      age(o) {
-        if (!isNum(o.min) || !isNum(o.max)) err('age.min / age.max는 숫자여야 합니다.');
-        else if (o.min > o.max) err('age.min이 age.max보다 큽니다.');
-      },
-      residence(o) {
-        if (!isStr(o.region)) err('residence.region이 비어 있습니다.');
-        if (!(o.minYears === null || o.minYears === undefined || isNum(o.minYears))) err('residence.minYears는 숫자 또는 null이어야 합니다.');
-      },
-      income(o) {
-        if (!isNum(o.maxPct)) err('income.maxPct는 숫자여야 합니다.');
-        if (!(o.minPct === null || o.minPct === undefined || isNum(o.minPct))) err('income.minPct는 숫자 또는 null이어야 합니다.');
-        if (isNum(o.minPct) && isNum(o.maxPct) && o.minPct >= o.maxPct) err('income.minPct가 maxPct보다 크거나 같습니다.');
-      },
-      status(o) {
-        if (!Array.isArray(o.allowed) || !o.allowed.length || o.allowed.some((v) => !STATUS.includes(v))) err(`status.allowed는 ${STATUS.join(' / ')} 중에서만 써야 합니다.`);
-      },
-      single(o) {
-        if (o.required !== true) err('single.required는 true여야 합니다 (조건이 없으면 single을 null로).');
-      },
-      housing(o) {
-        if (!Array.isArray(o.allowed) || !o.allowed.length || o.allowed.some((v) => !HOUSING.includes(v))) err(`housing.allowed는 ${HOUSING.join(' / ')} 중에서만 써야 합니다.`);
-      },
-    };
-    for (const [key, fn] of Object.entries(check)) {
-      const o = c[key];
-      if (o === undefined) { c[key] = null; continue; }
-      if (o === null) continue;
-      if (typeof o !== 'object' || Array.isArray(o)) { err(`conditions.${key}는 객체 또는 null이어야 합니다.`); continue; }
-      fn(o); q(key, o);
-    }
-    for (const key of Object.keys(c)) if (!(key in check)) err(`알 수 없는 조건 키입니다: ${key}`);
-  }
-
-  if (!Array.isArray(p.extraChecks) || p.extraChecks.some((v) => typeof v !== 'string')) err('extraChecks는 문장 배열이어야 합니다.');
-  if (!Array.isArray(p.exclusiveWith) || p.exclusiveWith.some((v) => typeof v !== 'string')) err('exclusiveWith는 문자열 배열이어야 합니다.');
-  for (const k of ['benefit', 'applyPeriod', 'howToApply', 'sourceUrl']) if (!strOrNull(p[k])) err(`${k}는 문자열 또는 null이어야 합니다.`);
-  for (const k of ['applyStart', 'applyEnd', 'checkedAt']) if (!dateOrNull(p[k])) err(`${k}는 YYYY-MM-DD 또는 null이어야 합니다.`);
-  return errors;
-}
 
 // LLM 결과에서 사람이 다는 항목(followUp · blocking 꼬리표)은 지운다
 function stripHumanOnly(p) {

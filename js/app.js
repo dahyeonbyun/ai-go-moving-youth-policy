@@ -606,15 +606,182 @@
     </div></section>`);
   }
 
-  // ── 공고 추가 #/add (4단계에서 채움) ──────────
+  // ── 공고 추가 #/add ───────────────────────────
+  // 원문 → extractConditions(mock/live) → 조건표에서 사람이 확인·수정 → 목록에 추가 (페이지 메모리에만)
+  const add = { scope: 'after', text: '', busy: false, error: '', details: [], warnings: [], draft: null, done: null };
+  const SCOPE_UI = [['before', '이사 전 (경기 · 수원)'], ['after', '이사 후 (서울 · 마포)'], ['national', '중앙 (전국)']];
+  // 조건표 행: [키, 항목 이름, 종류] — 종류 num/text는 입력칸, list는 여러 개 고르기, flag는 켜고 끄기
+  const ADD_FIELDS = [
+    ['age.min', '나이 하한 (만)', 'num'], ['age.max', '나이 상한 (만)', 'num'],
+    ['residence.region', '거주 지역', 'text'], ['residence.minYears', '거주 기간 (년 이상)', 'num'],
+    ['income.minPct', '소득 하한 (중위소득 %, 초과)', 'num'], ['income.maxPct', '소득 상한 (중위소득 %, 이하)', 'num'],
+    ['status.allowed', '신분', 'list', Logic.LABELS.status], ['single.required', '1인 가구', 'flag'],
+    ['housing.allowed', '주거 형태', 'list', Logic.LABELS.housing],
+  ];
+  const INFO_FIELDS = [['name', '제도명'], ['org', '운영 주체'], ['benefit', '지원 내용'], ['applyPeriod', '신청 기간'],
+    ['applyStart', '접수 시작 (YYYY-MM-DD)'], ['applyEnd', '접수 마감 (YYYY-MM-DD)'], ['howToApply', '신청 방법'], ['sourceUrl', '공고 원문 주소']];
+
+  function addFieldRow([k, label, kind, opts]) {
+    const [ck, sub] = k.split('.');
+    const cond = add.draft.conditions[ck];
+    const quote = cond ? `<span class="quote">「${esc(cond.quote)}」</span>` : '<span class="faint">공고에 없음 (검사하지 않음)</span>';
+    let val;
+    if (!cond) val = '<span class="faint">-</span>';
+    else if (kind === 'list') {
+      const cur = cond[sub] || [];
+      val = `<div class="seg multi" role="group" aria-label="${esc(label)}">${Object.entries(opts).map(([v, l]) =>
+        `<button type="button" data-act="add-pick" data-k="${k}" data-v="${v}" aria-pressed="${cur.includes(v)}">${esc(l)}</button>`).join('')}</div>`;
+    } else if (kind === 'flag') {
+      val = `<div class="seg"><button type="button" data-act="add-flag" data-k="${k}" aria-pressed="${cond.required === true}">1인 가구만</button></div>`;
+    } else {
+      const v = cond[sub];
+      val = `<input class="line-input" data-k="${k}" data-kind="${kind}" ${kind === 'num' ? 'inputmode="numeric"' : ''} value="${esc(v == null ? '' : v)}" aria-label="${esc(label)}" placeholder="없음">`;
+    }
+    return `<tr><th scope="row">${esc(label)}</th><td>${val}</td><td>${quote}</td></tr>`;
+  }
+
+  function addInner() {
+    const d = add.draft;
+    const scopeSeg = `<div class="seg" role="group" aria-label="구분">${SCOPE_UI.map(([v, l]) =>
+      `<button type="button" data-act="add-scope" data-v="${v}" aria-pressed="${add.scope === v}" ${add.busy || d ? 'disabled' : ''}>${l}</button>`).join('')}</div>`;
+    const errHtml = add.error ? `<div class="add-error" role="alert"><p>${esc(add.error)}</p>${add.details.length ? `<ul>${add.details.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}</div>` : '';
+    if (add.done) {
+      return `<p class="add-done" role="status">「${esc(add.done.name)}」 제도를 비교 목록에 추가했습니다. 이 페이지를 닫거나 새로고침하면 사라집니다.</p>
+        <div class="actions">${add.done.back ? `<a class="btn primary" href="${add.done.back}">결과 보기</a>` : '<button type="button" class="btn primary" data-act="start">비교하기</button>'}
+        <button type="button" class="btn" data-act="add-reset">공고 더 추가하기</button></div>`;
+    }
+    if (!d) {
+      return `<div class="add-field"><p class="add-label">구분</p>${scopeSeg}</div>
+        <div class="add-field"><label class="add-label" for="add-text">공고 원문</label>
+          <textarea id="add-text" class="add-text" rows="12" placeholder="공고 원문을 붙여 넣으세요" ${add.busy ? 'disabled' : ''}>${esc(add.text)}</textarea></div>
+        ${errHtml}
+        <div class="actions"><button type="button" class="btn" data-act="add-sample" ${add.busy ? 'disabled' : ''}>예시 공고</button>
+          <button type="button" class="btn primary" data-act="add-extract" ${add.busy ? 'disabled' : ''}>${add.busy ? '정리하고 있습니다' : '조건 정리'}</button></div>
+        <p class="faint small" id="add-mode"></p>`;
+    }
+    const extras = (d.extraChecks || []).join('\n');
+    return `<div class="add-field"><p class="add-label">구분</p>${scopeSeg}</div>
+      <p class="page-desc">원문 문장과 대조해 값을 확인하세요. 틀린 값은 고칠 수 있습니다. 빈 칸은 '없음'으로 저장합니다.</p>
+      ${add.warnings.length ? `<ul class="add-warn">${add.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+      <h2 class="add-h">자격 조건</h2>
+      <div class="table-wrap"><table class="cmp add-table"><thead><tr><th>항목</th><th>추출값</th><th>원문 문장</th></tr></thead>
+        <tbody>${ADD_FIELDS.map(addFieldRow).join('')}</tbody></table></div>
+      <h2 class="add-h">제도 정보</h2>
+      <div class="table-wrap"><table class="cmp add-table"><tbody>
+        ${INFO_FIELDS.map(([k, l]) => `<tr><th scope="row">${esc(l)}</th><td colspan="2"><input class="line-input wide" data-k="${k}" data-kind="info" value="${esc(d[k] == null ? '' : d[k])}" aria-label="${esc(l)}" placeholder="없음"></td></tr>`).join('')}
+        <tr><th scope="row">신청 전 확인<br><span class="faint">판정에 반영 안 함, 한 줄에 하나</span></th><td colspan="2"><textarea class="add-text small-text" data-k="extraChecks" rows="${Math.max(3, (d.extraChecks || []).length)}" aria-label="신청 전 확인">${esc(extras)}</textarea></td></tr>
+      </tbody></table></div>
+      ${errHtml}
+      <div class="actions"><button type="button" class="btn" data-act="add-reset">다시 하기</button>
+        <button type="button" class="btn primary" data-act="add-commit">목록에 추가</button></div>`;
+  }
+
   function renderAdd(input) {
     const back = isComplete(input) ? `#/result?${toQuery(input)}` : '#/';
     document.title = '공고 직접 추가 · 이사 청년 제도 비교';
-    return el(`<section class="screen"><div class="page">
+    const node = el(`<section class="screen"><div class="page add">
       <div class="res-top"><a class="home" href="${back}">결과로 돌아가기</a></div>
       <h1 tabindex="-1">공고 직접 추가</h1>
-      <p class="page-desc">공고 원문을 붙여 넣으면 자격 조건을 표로 옮기고, 확인을 거쳐 비교 목록에 더합니다. 이 화면은 다음 단계에서 연결합니다.</p>
+      <p class="page-desc">공고 원문을 붙여 넣으면 자격 조건을 표로 옮깁니다. 확인을 거친 뒤 비교 목록에 더합니다. 해당 여부는 기존 제도와 같은 규칙으로 판정합니다.</p>
+      <div id="add-box">${addInner()}</div>
     </div></section>`);
+    showMode(node);
+    return node;
+  }
+
+  function refreshAdd(focusSel) {
+    const box = $('#add-box');
+    if (!box) return;
+    box.innerHTML = addInner();
+    showMode(box);
+    const f = focusSel && box.querySelector(focusSel);
+    if (f) f.focus({ preventScroll: true });
+  }
+
+  function showMode(root) {
+    if (!window.ExtractClient) return;
+    window.ExtractClient.getMode().then((m) => {
+      const p = $('#add-mode', root);
+      if (p) p.textContent = m === 'live' ? '서버에 연결되어 있습니다. 붙여 넣은 원문을 정리합니다.' : 'mock 모드입니다. 예시 공고만 정리할 수 있습니다.';
+    });
+  }
+
+  async function runExtract() {
+    const ta = $('#add-text');
+    if (ta) add.text = ta.value;
+    add.error = ''; add.details = []; add.busy = true;
+    refreshAdd();
+    try {
+      add.draft = await window.ExtractClient.extractConditions(add.text, add.scope);
+      add.warnings = window.ExtractClient.lastWarnings || [];
+    } catch (e) {
+      add.error = e.message; add.details = e.details || [];
+    }
+    add.busy = false;
+    refreshAdd(add.draft ? '.add-table input, .add-table button' : '[data-act="add-extract"]');
+  }
+
+  // 조건표의 입력칸 → draft 정책 객체. fold=true면 값이 모두 빈 조건은 조건째 null (= 검사하지 않음)
+  function collectDraft(fold) {
+    const p = JSON.parse(JSON.stringify(add.draft));
+    p.scope = add.scope;
+    for (const inp of document.querySelectorAll('#add-box input[data-k], #add-box textarea[data-k]')) {
+      const k = inp.dataset.k;
+      const raw = inp.value.trim();
+      if (k === 'extraChecks') { p.extraChecks = raw.split('\n').map((s) => s.trim()).filter(Boolean); continue; }
+      const val = raw === '' ? null : inp.dataset.kind === 'num' && /^\d+(\.\d+)?$/.test(raw) ? Number(raw) : raw; // 숫자가 아니면 문자열로 두어 스키마 검사에서 걸리게
+      const [a, b] = k.split('.');
+      if (b) { if (p.conditions[a]) p.conditions[a][b] = val; } else p[a] = val;
+    }
+    if (fold) {
+      for (const [ck, c] of Object.entries(p.conditions)) {
+        if (!c) continue;
+        const vals = Object.entries(c).filter(([key]) => key !== 'quote').map(([, v]) => v);
+        if (vals.every((v) => v == null || (Array.isArray(v) && !v.length))) p.conditions[ck] = null;
+      }
+    }
+    return p;
+  }
+
+  function commitAdd(input) {
+    const p = collectDraft(true);
+    const errors = window.Schema ? window.Schema.validatePolicy(p) : [];
+    if (allPolicies().some((x) => x.id === p.id)) errors.unshift('이미 목록에 있는 제도입니다.');
+    if (errors.length) {
+      add.draft = p; add.error = '목록에 추가하지 못했습니다. 아래를 고치세요.'; add.details = errors;
+      refreshAdd('.add-error');
+      return;
+    }
+    p.addedByUser = true;
+    window.App.addPolicy(p);
+    add.done = { name: p.name, back: isComplete(input) ? `#/result?${toQuery(input)}` : null };
+    add.draft = null; add.text = ''; add.error = ''; add.details = []; add.warnings = [];
+    refreshAdd('.add-done');
+  }
+
+  function onAddClick(t) {
+    const act = t.dataset.act;
+    if (act === 'add-scope') { if (add.draft) return; add.scope = t.dataset.v; const ta = $('#add-text'); if (ta) add.text = ta.value; refreshAdd(`[data-act="add-scope"][data-v="${t.dataset.v}"]`); }
+    else if (act === 'add-sample') {
+      const texts = window.RAW_TEXTS || {};
+      const id = Object.keys(texts)[0];
+      if (!id) return;
+      add.text = texts[id];
+      const m = (window.MOCK_EXTRACTIONS || {})[id];
+      if (m && m.scope) add.scope = m.scope;
+      add.error = ''; add.details = [];
+      refreshAdd('#add-text');
+    } else if (act === 'add-extract') runExtract();
+    else if (act === 'add-reset') { add.draft = null; add.done = null; add.error = ''; add.details = []; add.warnings = []; refreshAdd('#add-text'); }
+    else if (act === 'add-pick' || act === 'add-flag') {
+      const draft = collectDraft(false); // 적어 둔 입력값을 유지한 채 버튼 값만 바꾼다
+      const [ck, sub] = t.dataset.k.split('.');
+      const c = draft.conditions[ck];
+      if (act === 'add-flag') c.required = c.required === true ? null : true;
+      else { const set = new Set(c[sub] || []); if (set.has(t.dataset.v)) set.delete(t.dataset.v); else set.add(t.dataset.v); c[sub] = Logic.LABELS[ck] ? Object.keys(Logic.LABELS[ck]).filter((v) => set.has(v)) : [...set]; }
+      add.draft = draft;
+      refreshAdd(`[data-act="${act}"][data-k="${t.dataset.k}"]${t.dataset.v ? `[data-v="${t.dataset.v}"]` : ''}`);
+    } else if (act === 'add-commit') commitAdd(parseHash().input);
   }
 
   // ── 라우터 ────────────────────────────────────
@@ -654,6 +821,7 @@
   function onClick(e) {
     const t = e.target.closest('[data-act]');
     if (!t || !$('#stage').contains(t) || t.closest('.leaving')) return;
+    if (t.dataset.act.startsWith('add-')) { onAddClick(t); return; }
     const n = currentQ();
     switch (t.dataset.act) {
       case 'start': go('/q/1', {}); break;
